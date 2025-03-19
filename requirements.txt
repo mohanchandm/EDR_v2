@@ -1,0 +1,8 @@
+# pip install -r requirements.txt --no-cache-dir
+gliner
+datasets
+streamlit
+torch==2.2.0
+transformers==4.49.0
+tokenizers==0.21.0
+#pygments
