@@ -1,127 +1,30 @@
 import streamlit as st
-from gliner import GLiNER
-import random
+from modules.model import load_model, SENSITIVITY_LEVELS
+from modules.redaction import redact_text, extract_text_from_file, redact_file_content, convert_to_original_format
+from typing import List, Dict, Optional, Tuple
 
 st.set_page_config(page_title="EDR Tool", layout="wide")
 
-# Initialize the GLiNER model
+# Cache the model loading
 @st.cache_resource
-def load_model():
-    return GLiNER.from_pretrained("mohanchandm/edr_v2")
+def get_model():
+    """Load and cache the model for entity detection."""
+    return load_model()
 
-model = load_model()
+# Load model once at startup
+model = get_model()
 
-# Comprehensive list of Privileged Information labels
-ALL_LABELS = [
-    "person", "organization", "phone number", "address", "passport number",
-    "email", "credit card number", "social security number", "health insurance id number",
-    "date of birth", "mobile phone number", "bank account number", "medication", "cpf",
-    "driver's license number", "tax identification number", "medical condition",
-    "identity card number", "national id number", "ip address", "email address", "iban",
-    "credit card expiration date", "username", "health insurance number", "registration number",
-    "student id number", "insurance number", "flight number", "landline phone number",
-    "blood type", "cvv", "reservation number", "digital signature", "social media handle",
-    "license plate number", "cnpj", "postal code", "serial number", "vehicle registration number",
-    "credit card brand", "fax number", "visa number", "insurance company",
-    "identity document number", "transaction number", "national health insurance number",
-    "cvc", "birth certificate number", "train ticket number", "passport expiration date"
-]
+# Set fixed confidence threshold
+CONFIDENCE_THRESHOLD = 0.1
 
-# Sensitivity levels and their corresponding Privileged Information types with redaction percentages
-# Comprehensive list of Privileged Information labels
-ALL_LABELS = [
-    "person", "organization", "phone number", "address", "passport number",
-    "email", "credit card number", "social security number", "health insurance id number",
-    "date of birth", "mobile phone number", "bank account number", "medication", "cpf",
-    "driver's license number", "tax identification number", "medical condition",
-    "identity card number", "national id number", "ip address", "email address", "iban",
-    "credit card expiration date", "username", "health insurance number", "registration number",
-    "student id number", "insurance number", "flight number", "landline phone number",
-    "blood type", "cvv", "reservation number", "digital signature", "social media handle",
-    "license plate number", "cnpj", "postal code", "serial number", "vehicle registration number",
-    "credit card brand", "fax number", "visa number", "insurance company",
-    "identity document number", "transaction number", "national health insurance number",
-    "cvc", "birth certificate number", "train ticket number", "passport expiration date"
-]
+def get_default_text() -> str:
+    """
+    Provide default text for the text redaction tab.
 
-# Sensitivity levels with manually selected Privileged Information types
-SENSITIVITY_LEVELS = {
-    "Low": [
-        "person", "date of birth", "medical condition", "medication",  # Basic personal/health info
-        "organization", "address", "email", "phone number", "mobile phone number",  # Contact info
-        "landline phone number", "social media handle", "username",  # Public-facing identifiers
-        "medical condition", "blood type", "reservation number",  # Less critical identifiers
-        "flight number", "train ticket number", "postal code",  # Travel and location
-        "insurance company", "registration number", "student id number",  # General identifiers
-        "vehicle registration number", "license plate number", "serial number",  # Vehicle-related
-        "fax number", "ip address", "digital signature"  # Tech-related, less critical
-    ],  # 27 labels (50%)
-    
-    "Medium": [
-        "person", "date of birth", "medical condition", "medication",  # Basic personal/health info
-        "organization", "address", "email", "phone number", "mobile phone number",  # Contact info
-        "landline phone number", "social media handle", "username",  # Public-facing identifiers
-        "medical condition", "blood type", "reservation number",  # Less critical identifiers
-        "flight number", "train ticket number", "postal code",  # Travel and location
-        "insurance company", "registration number", "student id number",  # General identifiers
-        "vehicle registration number", "license plate number", "serial number",  # Vehicle-related
-        "fax number", "ip address", "digital signature",  # Tech-related
-        # Add more sensitive identifiers
-        "social security number", "health insurance id number", "health insurance number",  # Health/legal IDs
-        "insurance number", "national health insurance number",  # Insurance-related
-        "tax identification number", "cpf", "cnpj",  # Tax-related
-        "email address", "iban", "bank account number",  # Financial/contact
-        "driver's license number", "identity card number", "national id number",  # Legal IDs
-        "identity document number", "visa number"  # Additional legal IDs
-    ],  # 42 labels (80%)
-    
-    "High": ALL_LABELS  # 53 labels (100%)
-}
-
-def redact_text(text, entities):
-    redacted_text = text
-    for entity in sorted(entities, key=lambda x: x["start"], reverse=True):
-        redacted_text = (
-            redacted_text[:entity["start"]] + 
-            "[REDACTED " + entity["label"].upper() + "]" + 
-            redacted_text[entity["end"]:]
-        )
-    return redacted_text
-
-def main():
-    # Streamlit UI configuration
-    
-    # Sidebar
-    st.sidebar.title("Redaction Settings")
-    
-    # Confidence threshold slider (moved above Privileged Information types)
-    threshold = st.sidebar.slider(
-        "Confidence Threshold",
-        min_value=0.1,
-        max_value=0.9,
-        value=0.5,
-        step=0.1,
-        help="Adjust the confidence level for Privileged Information detection"
-    )
-    
-    # Sensitivity level selection
-    sensitivity = st.sidebar.selectbox(
-        "Select Sensitivity Level",
-        ["Low", "Medium", "High"],
-        help="Choose the level of Privileged Information detection sensitivity"
-    )
-    
-    # Display selected Privileged Information types
-    st.sidebar.subheader("Detected Privileged Information Types")
-    for pii_type in SENSITIVITY_LEVELS[sensitivity]:
-        st.sidebar.markdown(f"✓ {pii_type}")
-    
-    # Main content
-    st.title("EDR Tool")
-    st.write("Enter text to detect and redact Privileged Information")
-    
-    # Text input
-    default_text = """
+    Returns:
+        str: The default text.
+    """
+    return """
 Medical Record
 
 Patient Name: John Doe
@@ -135,54 +38,223 @@ John Doe underwent a routine physical examination. The procedure included measur
 Medication Prescribed:
 Ibuprofen 200 mg: Take one tablet every 6-8 hours as needed for headache and pain relief.
 Lisinopril 10 mg: Take one tablet daily to manage high blood pressure.
+
 Next Examination Date:
 15-11-2024
+
 My name is Mohan Chand Mandava i take 50 mg of caffeine everyday
 """
+
+def render_sidebar() -> str:
+    """
+    Render the sidebar with sensitivity settings and Mistral API key configuration.
+
+    Returns:
+        str: The selected sensitivity level.
+    """
+    with st.sidebar:
+        st.title("Redaction Settings")
+        
+        # Mistral API Key Configuration        
+        mistral_api_key = st.text_input(
+            "Mistral API Key (OCR)",
+            value=st.secrets.get("mistral_api_key", ""),
+            type="password",
+            help="Your Mistral API key is used for OCR processing of images and PDFs. Keep it secure."
+        )
+        
+        if mistral_api_key and mistral_api_key != st.secrets.get("mistral_api_key", ""):
+            st.session_state.mistral_api_key = mistral_api_key
+            st.secrets["mistral_api_key"] = mistral_api_key
+            st.success("Mistral API key updated and stored in secrets.")
+        
+        # Sensitivity Level Selection
+        sensitivity = st.selectbox(
+            "Select Sensitivity Level",
+            ["Low", "Medium", "High"],
+            help="Choose the level of Privileged Information detection sensitivity"
+        )
+        st.subheader("Detected Privileged Information Types")
+        with st.container(height=300):
+            for pii_type in SENSITIVITY_LEVELS[sensitivity]:
+                st.markdown(f"✓ {pii_type}")
+    return sensitivity
+
+def clean_text_for_display(text: str) -> str:
+    """
+    Clean text for display by removing markdown table formatting while preserving original newlines.
+
+    Args:
+        text (str): The input text to clean.
+
+    Returns:
+        str: The cleaned text with markdown tables converted to plain text.
+    """
+    lines = text.split('\n')
+    cleaned_lines = []
+    in_table = False
+    table_lines = []
+    
+    for line in lines:
+        if line.strip().startswith('|') and line.strip().endswith('|'):
+            in_table = True
+            if not line.strip().startswith('| ---'):
+                cells = [cell.strip() for cell in line.split('|')[1:-1]]
+                paired_cells = []
+                for i in range(0, len(cells), 2):
+                    left_cell = cells[i] if i < len(cells) else ''
+                    right_cell = cells[i + 1] if i + 1 < len(cells) else ''
+                    if left_cell or right_cell:
+                        left_cell_padded = left_cell.ljust(30)
+                        paired_cells.append(f"{left_cell_padded} {right_cell}")
+                if paired_cells:
+                    table_lines.extend(paired_cells)
+        else:
+            if in_table:
+                # End of table, append the table lines and a single newline
+                cleaned_lines.extend(table_lines)
+                table_lines = []
+                in_table = False
+                cleaned_lines.append('')  # Add a single newline after the table
+            # Preserve the line as-is (including empty lines)
+            cleaned_lines.append(line)
+    
+    # If the last section was a table, append its lines
+    if table_lines:
+        cleaned_lines.extend(table_lines)
+    
+    # Remove trailing empty lines
+    while cleaned_lines and cleaned_lines[-1] == '':
+        cleaned_lines.pop()
+    
+    return '\n'.join(cleaned_lines)
+
+def display_results(original_text: str, redacted_text: str, entities: List[Dict[str, any]], key_prefix: str = "") -> None:
+    """
+    Display the original and redacted text side by side, along with detected entities.
+
+    Args:
+        original_text (str): The original text.
+        redacted_text (str): The redacted text.
+        entities (List[Dict[str, any]]): The detected entities.
+        key_prefix (str): Prefix for Streamlit widget keys.
+    """
+    original_cleaned = clean_text_for_display(original_text)
+    redacted_cleaned = clean_text_for_display(redacted_text)
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        st.subheader("Original Content")
+        st.text_area("Original", original_cleaned, height=400, key=f"{key_prefix}original")
+    with col2:
+        st.subheader("Redacted Content")
+        st.text_area("Redacted", redacted_cleaned, height=400, key=f"{key_prefix}redacted")
+    
+    # st.subheader("Detected Privileged Information Entities")
+    # with st.container(height=200):
+    #     if entities:
+    #         for entity in entities:
+    #             st.write(f"- {entity['text']} => {entity['label']} (Confidence: {entity['score']:.2f})")
+    #     else:
+    #         st.write("No Privileged Information entities detected with the current settings.")
+
+def text_redaction_tab(sensitivity: str) -> None:
+    """
+    Render the text redaction tab.
+
+    Args:
+        sensitivity (str): The selected sensitivity level.
+    """
+    st.write("Enter text to detect and redact Privileged Information")
     
     input_text = st.text_area(
         "Input Text",
-        value=default_text,
+        value=get_default_text(),
         height=300,
         help="Paste or type the text you want to analyze"
     )
     
-    if st.button("Redact Privileged Information"):
+    if st.button("Redact Text", key="text_redact"):
         if input_text:
-            # Perform entity extraction
             entities = model.predict_entities(
                 input_text,
                 SENSITIVITY_LEVELS[sensitivity],
-                threshold=threshold
+                threshold=CONFIDENCE_THRESHOLD
             )
-            
-            # Create two columns for side-by-side display
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                st.subheader("Original Text")
-                st.text_area("Original", input_text, height=400, key="original")
-            
-            with col2:
-                st.subheader("Redacted Text")
-                redacted_text = redact_text(input_text, entities)
-                st.text_area("Redacted", redacted_text, height=400, key="redacted")
-            
-            # Display detected entities
-            st.subheader("Detected Privileged Information Entities")
-            if entities:
-                for entity in entities:
-                    st.write(f"- {entity['text']} => {entity['label']} (Confidence: {entity['score']:.2f})")
-            else:
-                st.write("No Privileged Information entities detected with the current settings.")
+            redacted_text = redact_text(input_text, entities)
+            display_results(input_text, redacted_text, entities, "text_")
+            st.download_button(
+                label="Download Redacted Text",
+                data=convert_to_original_format(redacted_text, "input.txt"),
+                file_name="redacted_input.txt",
+                mime="text/plain"
+            )
         else:
             st.warning("Please enter some text to analyze.")
 
+def file_redaction_tab(sensitivity: str) -> None:
+    """
+    Render the file redaction tab.
+
+    Args:
+        sensitivity (str): The selected sensitivity level.
+    """
+    st.write("Upload a file (txt, docx, pdf, jpg, png) to detect and redact Privileged Information")
+    
+    uploaded_file = st.file_uploader(
+        "Choose a file",
+        type=['txt', 'docx', 'pdf', 'jpg', 'png'],
+        help="Upload a text file, Word document, PDF, or image"
+    )
+    
+    if st.button("Redact File", key="file_redact"):
+        if uploaded_file:
+            try:
+                original_text, redacted_text, entities = redact_file_content(
+                    uploaded_file,
+                    model,
+                    SENSITIVITY_LEVELS[sensitivity],
+                    CONFIDENCE_THRESHOLD
+                )
+                if original_text and redacted_text:
+                    display_results(original_text, redacted_text, entities, "file_")
+                    
+                    ext = uploaded_file.name.split('.')[-1].lower()
+                    mime_types = {
+                        'txt': 'text/plain',
+                        'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                        'pdf': 'application/pdf',
+                        'jpg': 'image/png',
+                        'png': 'image/png'
+                    }
+                    output_ext = '.txt' if ext == 'txt' else f'.{ext}'
+                    output_mime = mime_types.get(ext, 'text/plain')
+                    
+                    st.download_button(
+                        label="Download Redacted Content",
+                        data=convert_to_original_format(redacted_text, uploaded_file.name),
+                        file_name=f"redacted_{uploaded_file.name.split('.')[0]}{output_ext}",
+                        mime=output_mime
+                    )
+                else:
+                    st.error("Unable to process file content.")
+            except Exception as e:
+                st.error(f"Error processing file: {str(e)}")
+        else:
+            st.warning("Please upload a file to analyze.")
+
+def main() -> None:
+    """Main function to run the Streamlit app."""
+    st.title("EDR Tool")
+    sensitivity = render_sidebar()
+    
+    tab1, tab2 = st.tabs(["Text Redaction", "File Redaction"])
+    
+    with tab1:
+        text_redaction_tab(sensitivity)
+    
+    with tab2:
+        file_redaction_tab(sensitivity)
+
 if __name__ == "__main__":
     main()
-
-
-# import sys
-# import streamlit as st
-
-# st.write(sys.executable)
