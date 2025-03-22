@@ -5,4 +5,12 @@ streamlit
 torch==2.2.0
 transformers==4.49.0
 tokenizers==0.21.0
+python-docx
+pdfplumber
+docx2txt
+mistralai
+reportlab
+Pillow
+markdown2
+beautifulsoup4
 #pygments
